@@ -28,7 +28,7 @@ jobs:
           aws cloudformation deploy \
             --template-file ec2-nginx-monitoring.yml \
             --stack-name "deploy-${USER_ID}-${PROJECT_ID}" \
-            --parameter-overrides UserId=$USER_ID ProjectId=$PROJECT_ID S3BucketName=yeshwanth-bukcet-project InstanceType=$INSTANCE_TYPE AllowedCidr=$ALLOWED_CIDR \
+            --parameter-overrides UserId=$USER_ID ProjectId=$PROJECT_ID S3BucketName=testbucketserviceminfy InstanceType=$INSTANCE_TYPE AllowedCidr=$ALLOWED_CIDR \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
           aws cloudformation describe-stacks --stack-name "deploy-${USER_ID}-${PROJECT_ID}" --query "Stacks[0].Outputs" --output json > outputs.json
           cat outputs.json

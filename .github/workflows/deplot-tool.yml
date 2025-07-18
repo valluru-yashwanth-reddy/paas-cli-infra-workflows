@@ -1,0 +1,36 @@
+name: Deploy Tool
+on:
+  repository_dispatch:
+    types: [deploy-tool]
+jobs:
+  deploy-infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}  # Omit if using non-temporary credentials
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Download CloudFormation template from S3
+        env:
+          TEMPLATE_S3_PATH: ${{ github.event.client_payload.template_s3_path }}
+        run: |
+          aws s3 cp ${TEMPLATE_S3_PATH}ec2-nginx-monitoring.yml ec2-nginx-monitoring.yml
+      - name: Deploy CloudFormation stack
+        env:
+          USER_ID: ${{ github.event.client_payload.user_id }}
+          PROJECT_ID: ${{ github.event.client_payload.project_id }}
+          INSTANCE_TYPE: ${{ github.event.client_payload.instance_type || 't2.micro' }}
+          ALLOWED_CIDR: ${{ github.event.client_payload.allowed_cidr || '0.0.0.0/0' }}
+        run: |
+          aws cloudformation deploy \
+            --template-file ec2-nginx-monitoring.yml \
+            --stack-name "deploy-${USER_ID}-${PROJECT_ID}" \
+            --parameter-overrides UserId=$USER_ID ProjectId=$PROJECT_ID S3BucketName=yeshwanth-bukcet-project InstanceType=$INSTANCE_TYPE AllowedCidr=$ALLOWED_CIDR \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+          aws cloudformation describe-stacks --stack-name "deploy-${USER_ID}-${PROJECT_ID}" --query "Stacks[0].Outputs" --output json > outputs.json
+          cat outputs.json
+          echo "Application URL: $(jq -r '.[] | select(.OutputKey==\"ApplicationURL\").OutputValue' outputs.json)"
+          echo "Grafana URL: $(jq -r '.[] | select(.OutputKey==\"GrafanaURL\").OutputValue' outputs.json)"

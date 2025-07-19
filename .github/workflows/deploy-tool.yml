@@ -1,7 +1,9 @@
 name: Deploy Tool
+
 on:
   repository_dispatch:
     types: [deploy-tool]
+
 jobs:
   deploy-infra:
     runs-on: ubuntu-latest
@@ -13,25 +15,39 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
+
       - name: Download CloudFormation template from S3
         env:
           TEMPLATE_S3_PATH: ${{ github.event.client_payload.template_s3_path }}
         run: |
-          aws s3 cp ${TEMPLATE_S3_PATH}ec2-nginx-monitoring.yml ec2-nginx-monitoring.yml
+          # The S3 URI from the payload might end with a slash, so we prevent a double slash
+          aws s3 cp "${TEMPLATE_S3_PATH%/}/ec2-nginx-monitoring.yml" ec2-nginx-monitoring.yml
+
       - name: Deploy CloudFormation stack
         env:
           USER_ID: ${{ github.event.client_payload.user_id }}
           PROJECT_ID: ${{ github.event.client_payload.project_id }}
           INSTANCE_TYPE: ${{ github.event.client_payload.instance_type || 't2.micro' }}
           ALLOWED_CIDR: ${{ github.event.client_payload.allowed_cidr || '0.0.0.0/0' }}
-          SUBNET_ID: subnet-0241343d499379e08 # Replace with your SubnetId
+          SUBNET_ID: subnet-0241343d499379e08 # Hardcoded SubnetId
+          VPC_ID: vpc-0f13aa99e3527346d            # <-- ADD YOUR VPC ID HERE
+
         run: |
           aws cloudformation deploy \
             --template-file ec2-nginx-monitoring.yml \
             --stack-name "deploy-${USER_ID}-${PROJECT_ID}" \
-            --parameter-overrides UserId=$USER_ID ProjectId=$PROJECT_ID S3BucketName=testbucketserviceminfy InstanceType=$INSTANCE_TYPE AllowedCidr=$ALLOWED_CIDR SubnetId=$SUBNET_ID \
+            --parameter-overrides \
+              UserId=$USER_ID \
+              ProjectId=$PROJECT_ID \
+              S3BucketName=testbucketserviceminfy \
+              InstanceType=$INSTANCE_TYPE \
+              AllowedCidr=$ALLOWED_CIDR \
+              SubnetId=$SUBNET_ID \
+              VpcId=$VPC_ID \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+
+          # Fetch and display outputs
           aws cloudformation describe-stacks --stack-name "deploy-${USER_ID}-${PROJECT_ID}" --query "Stacks[0].Outputs" --output json > outputs.json
           cat outputs.json
-          echo "Application URL: $(jq -r '.[] | select(.OutputKey==\"ApplicationURL\").OutputValue' outputs.json)"
-          echo "Grafana URL: $(jq -r '.[] | select(.OutputKey==\"GrafanaURL\").OutputValue' outputs.json)"
+          echo "Application URL: $(jq -r '.[] | select(.OutputKey=="ApplicationURL").OutputValue' outputs.json)"
+          echo "Grafana URL: $(jq -r '.[] | select(.OutputKey=="GrafanaURL").OutputValue' outputs.json)"

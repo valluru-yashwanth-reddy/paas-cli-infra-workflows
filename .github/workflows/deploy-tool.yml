@@ -11,7 +11,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}  # Omit if using non-temporary credentials
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
       - name: Download CloudFormation template from S3
         env:
@@ -24,11 +24,12 @@ jobs:
           PROJECT_ID: ${{ github.event.client_payload.project_id }}
           INSTANCE_TYPE: ${{ github.event.client_payload.instance_type || 't2.micro' }}
           ALLOWED_CIDR: ${{ github.event.client_payload.allowed_cidr || '0.0.0.0/0' }}
+          SUBNET_ID: subnet-0241343d499379e08 # Replace with your SubnetId
         run: |
           aws cloudformation deploy \
             --template-file ec2-nginx-monitoring.yml \
             --stack-name "deploy-${USER_ID}-${PROJECT_ID}" \
-            --parameter-overrides UserId=$USER_ID ProjectId=$PROJECT_ID S3BucketName=testbucketserviceminfy InstanceType=$INSTANCE_TYPE AllowedCidr=$ALLOWED_CIDR \
+            --parameter-overrides UserId=$USER_ID ProjectId=$PROJECT_ID S3BucketName=testbucketserviceminfy InstanceType=$INSTANCE_TYPE AllowedCidr=$ALLOWED_CIDR SubnetId=$SUBNET_ID \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
           aws cloudformation describe-stacks --stack-name "deploy-${USER_ID}-${PROJECT_ID}" --query "Stacks[0].Outputs" --output json > outputs.json
           cat outputs.json

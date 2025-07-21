@@ -1,0 +1,7 @@
+{
+  "user_id": "finaltest1",
+  "project_id": "ddc72dfd-c2be-4211-a26b-a70f80bd8dee",
+  "template_s3_path": "s3://testbucketserviceminfy/templates/",
+  "instance_type": "t2.micro",
+  "allowed_cidr": "0.0.0.0/0"
+}

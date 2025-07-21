@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  UserId:
+    Type: String
+  ProjectId:
+    Type: String
+  S3BucketName:
+    Type: String
+    Default: testbucketserviceminfy
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t2.small, t2.medium]
+  AMIId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  AllowedCidr:
+    Type: String
+    Default: 0.0.0.0/0
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID for the EC2 instance
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where the Security Group will be created
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AMIId
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Install AWS CLI
+          yum install -y aws-cli
+          # Install Nginx
+          yum update -y
+          amazon-linux-extras install nginx1 -y
+          systemctl enable nginx
+          systemctl start nginx
+          mkdir -p /usr/share/nginx/html
+          # Sync static build files from S3
+          aws s3 sync s3://${S3BucketName}/${UserId}/${ProjectId}/latest/ /usr/share/nginx/html/ --delete
+          # Configure Nginx stub status for Prometheus
+          echo "server { listen 80; location / { root /usr/share/nginx/html; try_files \$uri \$uri/ /index.html; } location /nginx_status { stub_status; allow 127.0.0.1; deny all; }}" > /etc/nginx/conf.d/default.conf
+          systemctl reload nginx
+          # Install Prometheus
+          wget https://github.com/prometheus/prometheus/releases/download/v2.47.1/prometheus-2.47.1.linux-amd64.tar.gz
+          tar xvf prometheus-2.47.1.linux-amd64.tar.gz
+          mv prometheus-2.47.1.linux-amd64/prometheus /usr/local/bin/
+          mv prometheus-2.47.1.linux-amd64/prometheus.yml /etc/prometheus.yml
+          useradd --no-create-home --shell /bin/false prometheus
+          chown prometheus:prometheus /usr/local/bin/prometheus /etc/prometheus.yml
+          cat <<EOF > /etc/prometheus.yml
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'nginx'
+              static_configs:
+                - targets: ['localhost:9113']
+            - job_name: 'node'
+              static_configs:
+                - targets: ['localhost:9100']
+          EOF
+          cat <<EOF > /etc/systemd/system/prometheus.service
+          [Unit]
+          Description=Prometheus
+          Wants=network-online.target
+          After=network-online.target
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus --config.file=/etc/prometheus.yml
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl enable prometheus
+          systemctl start prometheus
+          # Install Node Exporter
+          wget https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz
+          tar xvf node_exporter-1.6.1.linux-amd64.tar.gz
+          mv node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
+          useradd --no-create-home --shell /bin/false node_exporter
+          chown node_exporter:node_exporter /usr/local/bin/node_exporter
+          cat <<EOF > /etc/systemd/system/node_exporter.service
+          [Unit]
+          Description=Node Exporter
+          Wants=network-online.target
+          After=network-online.target
+          [Service]
+          User=node_exporter
+          Group=node_exporter
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl enable node_exporter
+          systemctl start node_exporter
+          # Install Nginx Prometheus Exporter
+          wget https://github.com/nginxinc/nginx-prometheus-exporter/releases/download/v0.11.0/nginx-prometheus-exporter_0.11.0_linux_amd64.tar.gz
+          tar xvf nginx-prometheus-exporter_0.11.0_linux_amd64.tar.gz
+          mv nginx-prometheus-exporter /usr/local/bin/
+          useradd --no-create-home --shell /bin/false nginx_exporter
+          chown nginx_exporter:nginx_exporter /usr/local/bin/nginx-prometheus-exporter
+          cat <<EOF > /etc/systemd/system/nginx-prometheus-exporter.service
+          [Unit]
+          Description=Nginx Prometheus Exporter
+          Wants=network-online.target
+          After=network-online.target
+          [Service]
+          User=nginx_exporter
+          Group=nginx_exporter
+          Type=simple
+          ExecStart=/usr/local/bin/nginx-prometheus-exporter -nginx.scrape-uri=http://localhost/nginx_status
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl enable nginx-prometheus-exporter
+          systemctl start nginx-prometheus-exporter
+          # Install Grafana
+          yum install -y https://dl.grafana.com/oss/release/grafana-10.1.0-1.x86_64.rpm
+          systemctl enable grafana-server
+          systemctl start grafana-server
+      Tags:
+        - Key: Name
+          Value: !Sub ${UserId}-${ProjectId}-WebServer
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP, Grafana, and Prometheus
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedCidr
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref AllowedCidr
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: !Ref AllowedCidr
+        - IpProtocol: tcp
+          FromPort: 9100
+          ToPort: 9100
+          CidrIp: !Ref AllowedCidr
+        - IpProtocol: tcp
+          FromPort: 9113
+          ToPort: 9113
+          CidrIp: !Ref AllowedCidr
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+
+Outputs:
+  PublicIP:
+    Description: Public IP of EC2 instance
+    Value: !GetAtt EC2Instance.PublicIp
+  ApplicationURL:
+    Description: URL to access the application
+    Value: !Sub http://${EC2Instance.PublicIp}/
+  GrafanaURL:
+    Description: URL to access Grafana
+    Value: !Sub http://${EC2Instance.PublicIp}:3000/
